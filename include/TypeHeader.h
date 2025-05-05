@@ -2,270 +2,317 @@
 
 #include "Utilities.h"
 
-#include <sstream>
-#include <string>
-#include <vector>
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <initializer_list>
 
 namespace xst {
 
-struct TypeHeader;
-struct TypeStore;
+/// A tag identifying the type of a header.
+enum TypeHeaderTag : uint8_t {
+  none_tag,
+  builtin_tag,
+  struct_tag,
+  enum_tag,
+};
 
-using TypeHeaderList = TypeHeader const**;
+template<TypeHeaderTag tag>
+struct CompositeHeader;
 
-/// The information necessary to uniquely identify atype.
+struct BuiltinHeader;
+using EnumHeader = CompositeHeader<enum_tag>;
+using StructHeader = CompositeHeader<struct_tag>;
+
+/// The information necessary to uniquely identify a type at runtime.
 struct TypeHeader {
-
-  /// Destorys `this`.
-  virtual ~TypeHeader() = default;
-
-  /// Returns a hash of the salient part of `this`.
-  virtual std::size_t hash_value() const = 0;
-
-  /// Returns `true` iff `this` is equal to the given identifier.
-  virtual bool equal_to(TypeHeader const&) const = 0;
-
-  /// Returns a textual description of the type.
-  virtual std::string description() const = 0;
-
-  /// Returns `true` iff `this` is equal to `other`.
-  bool operator==(TypeHeader const& other) const {
-    return this->equal_to(other);
-  }
-
 private:
 
-  // Note: The following methods are notionally methods of the type store and are no meant to be
-  // called from anywhere else. They are defined here to enable the default dynamic dispatch
-  // mechanism of virtual calls.
+  /// The raw value of this instance.
+  std::uintptr_t raw_value;
 
-  friend TypeStore;
+public:
 
-  /// Implements `TypeStore::is_trivial` for the described type.
-  virtual bool is_trivial(TypeStore const&) const = 0;
+  /// A tag identifying the type of a header.
+  using Tag = TypeHeaderTag;
 
-  /// Implements `TypeStore::size` for the described type.
-  virtual std::size_t size(TypeStore const&) const = 0;
+  TypeHeader(TypeHeader const&) = delete;
+  TypeHeader& operator=(TypeHeader const&) = delete;
 
-  /// Implements `TypeStore::alignment` for the described type.
-  virtual std::size_t alignment(TypeStore const&) const = 0;
+  TypeHeader(TypeHeader&& other) : raw_value(other.raw_value) {
+    other.raw_value = 0;
+  }
 
-  /// Implements `TypeStore::copy_initialize` for the described type.
-  virtual void copy_initialize(void*, void*, TypeStore const&) const = 0;
+  template<typename Header>
+  TypeHeader(Header&& other) : raw_value(other.raw_value) {
+    other.raw_value = 0;
+  }
 
-  /// Implements `TypeStore::deinitialize` for the described type.
-  virtual void deinitialize(void*, TypeStore const&) const = 0;
+  TypeHeader& operator=(TypeHeader&& other) {
+    raw_value = other.raw_value;
+    other.raw_value = 0;
+    return *this;
+  }
 
-  /// Implements `TypeStore::dump_instance` for the described type.
-  virtual void dump_instance(std::ostream&, void*, TypeStore const&) const = 0;
+  ~TypeHeader();
+
+  /// Returns the raw value of this instance.
+  inline constexpr std::uintptr_t raw() const {
+    return raw_value;
+  }
+
+  /// Returns the tag of this instance, which identifies the contents of this header.
+  inline constexpr Tag tag() const {
+    return static_cast<Tag>(raw_value & 7);
+  }
+
+  /// Returns `this` if it was widened from an instance of `T` or `nullptr` otherwise.
+  template<typename T>
+  inline constexpr T const* as() const {
+    return tag() == T::header_tag()
+      ? static_cast<T const*>(static_cast<void const*>(this))
+      : nullptr;
+  }
+
+  /// Returns a hash of the notional value of `this`.
+  std::size_t hash_value() const;
+
+  /// Returns `true` iff `this` is equal to `other`.
+  bool equal_to(TypeHeader const& other) const;
+
+  /// Returns `true` iff `this` is equal to `other`.
+  inline bool operator==(TypeHeader const& other) const {
+    return equal_to(other);
+  }
+
+  /// Returns a description of the type identified by this instance.
+  std::string description() const;
+
+  /// Returns `tag` as a mask.
+  static inline constexpr std::uintptr_t mask(Tag tag) {
+    return static_cast<std::uintptr_t>(tag);
+  }
 
 };
 
 /// The header of a built-in type.
-struct BuiltinHeader final : public TypeHeader {
+struct BuiltinHeader {
+private:
 
-  /// The internal representation of a built-in identifier.
-  enum Value : uint8_t {
-    boolean,
-    i32,
-    i64,
-    str,
+  friend TypeHeader;
+
+  /// The raw value of this instance.
+  std::uintptr_t raw_value;
+
+public:
+
+  /// Returns the type header tag associated of this definition.
+  static inline constexpr TypeHeader::Tag header_tag() { return builtin_tag; }
+
+  /// A tag identifying a built-in type.
+  enum Tag : uint8_t {
+    boolean, i32, i64, str,
   };
 
-  /// The raw value of this identifier.
-  Value raw_value;
+  /// Returns the tag of the type identified by this header.
+  inline constexpr Tag tag() const {
+    return static_cast<Tag>((raw_value >> 8) & 0xff);
+  }
 
-  /// Creates an instance with the given raw value.
-  constexpr BuiltinHeader(Value raw_value) : raw_value(raw_value) {}
+  /// Creates an instance identifying the given built-in type.
+  constexpr BuiltinHeader(
+    Tag tag
+  ) : raw_value(
+    static_cast<std::uintptr_t>(tag) << 8 | TypeHeader::mask(builtin_tag)
+  ) {}
 
-  constexpr std::size_t hash_value() const override {
+  /// Returns a hash of the notional value of `this`.
+  inline constexpr std::size_t hash_value() const {
     return static_cast<std::size_t>(raw_value);
   }
 
-  constexpr bool equal_to(TypeHeader const& other) const override {
-    auto const* that = dynamic_cast<BuiltinHeader const*>(&other);
-    if (that != nullptr) {
-      return this->raw_value == that->raw_value;
-    } else {
-      return false;
+  /// Returns `true` iff `this` is equal to `other`.
+  constexpr bool operator==(BuiltinHeader const& other) const = default;
+
+  /// Returns `true` iff `this` is equal to `other`.
+  constexpr inline bool equal_to(TypeHeader const& other) const {
+    auto that = other.as<BuiltinHeader>();
+    return (that != nullptr) && (*this == *that);
+  }
+
+  /// Returns a description of the type identified by this instance.
+  constexpr std::string description() const {
+    switch (tag()) {
+      case xst::BuiltinHeader::boolean:
+        return "Bool";
+      case xst::BuiltinHeader::i32:
+        return "Int32";
+      case xst::BuiltinHeader::i64:
+        return "Int64";
+      case xst::BuiltinHeader::str:
+        return "String";
     }
   }
 
-  constexpr std::string description() const override {
-    switch (raw_value) {
-      case Value::boolean: return "Bool";
-      case Value::i32: return "Int32";
-      case Value::i64: return "Int64";
-      case Value::str: return "String";
-    }
+  /// Returns a pointer to `this` as a polymorphic type header.
+  inline constexpr TypeHeader const* widened() const {
+    return static_cast<TypeHeader const*>(static_cast<void const*>(this));
   }
-
-private:
-
-  inline bool is_trivial(TypeStore const&) const override { return true; };
-
-  std::size_t size(TypeStore const&) const override;
-
-  std::size_t alignment(TypeStore const&) const override;
-
-  void copy_initialize(void*, void*, TypeStore const&) const override;
-
-  void deinitialize(void*, TypeStore const&) const override;
-
-  void dump_instance(std::ostream&, void*, TypeStore const&) const override;
 
 };
 
-/// The header of a lambda type.
-struct LambdaHeader final : public TypeHeader {
-
-  /// The result type followed by the type of each parameter of the lambda.
-  const std::vector<TypeHeader const*> interface;
-
-  /// Creates an instance with the result type and parameter types.
-  constexpr LambdaHeader(
-    std::initializer_list<TypeHeader const*> interface
-  ) : interface(interface) {}
-
-  constexpr std::size_t hash_value() const override {
-    Hasher h;
-    h.combine(interface.begin(), interface.end());
-    return h.finalize();
-  }
-
-  constexpr bool equal_to(TypeHeader const& other) const override {
-    auto const* that = dynamic_cast<LambdaHeader const*>(&other);
-    if (that != nullptr) {
-      return this->interface == that->interface;
-    } else {
-      return false;
-    }
-  }
-
-  std::string description() const override {
-    std::stringstream o;
-    o << "(";
-    for (auto i = 1; i < interface.size(); ++i) {
-      if (i > 1) { o << ", "; }
-      o << interface[i]->description();
-    }
-    o << ") -> " << interface[0]->description();
-    return o.str();
-  }
-
+template<TypeHeader::Tag tag>
+struct CompositeHeader {
 private:
 
-  bool is_trivial(TypeStore const&) const override;
+  friend TypeHeader;
 
-  std::size_t size(TypeStore const&) const override;
+  /// The raw value of this instance.
+  std::uintptr_t raw_value;
 
-  std::size_t alignment(TypeStore const&) const override;
+  /// Returns the base address of this instance's representation, or `nullptr` if `this` is moved.
+  inline std::uintptr_t* representation() const {
+    return reinterpret_cast<std::uintptr_t*>(raw_value & ~7);
+  }
 
-  void copy_initialize(void*, void*, TypeStore const&) const override;
+public:
 
-  void deinitialize(void*, TypeStore const&) const override;
-
-  void dump_instance(std::ostream&, void*, TypeStore const&) const override;
-
-};
-
-/// Common implementation of nominal product and sum types.
-struct CompositeHeader : public TypeHeader {
-
-  /// The name of the type.
-  const char* name;
-
-  /// The type arguments of the type.
-  const std::vector<TypeHeader const*> arguments;
+  /// Returns the type header tag associated of this definition.
+  static inline constexpr TypeHeader::Tag header_tag() { return tag; }
 
   /// Creates an instance with the given properties.
-  constexpr CompositeHeader(
+  CompositeHeader(
     const char* name, std::initializer_list<TypeHeader const*> arguments
-  ) : name(std::move(name)), arguments(arguments) {}
+  ) {
+    constexpr auto a = std::max<std::size_t>(alignof(std::uintptr_t), 8);
+    auto p = new (std::align_val_t(a)) std::uintptr_t[2 + arguments.size()];
+    auto q = p;
 
-  constexpr std::size_t hash_value() const override {
+    // Store the name, argument count, and argument values.
+    *(q++) = reinterpret_cast<std::uintptr_t>(name);
+    *(q++) = static_cast<std::uintptr_t>(arguments.size());
+    for (auto a : arguments) { *(q++) = a->raw(); }
+
+    // Store the tag.
+    raw_value = reinterpret_cast<std::uintptr_t>(p) | TypeHeader::mask(struct_tag);
+  }
+
+  CompositeHeader(CompositeHeader const&) = delete;
+  CompositeHeader& operator=(CompositeHeader const&) = delete;
+
+  CompositeHeader(CompositeHeader&& other) : raw_value(other.raw_value) {
+    other.raw_value = 0;
+  }
+
+  CompositeHeader& operator=(CompositeHeader&& other) {
+    raw_value = other.raw_value;
+    other.raw_value = 0;
+    return *this;
+  }
+
+  ~CompositeHeader() {
+    delete representation();
+  }
+
+  /// Returns the name of the type.
+  const char* name() const {
+    auto p = representation();
+    if (p == nullptr) {
+      return nullptr;
+    } else {
+      auto n = reinterpret_cast<const char*>(p[0]);
+      return n;
+    }
+  }
+
+  /// Returns the number of type arguments.
+  std::size_t arguments_size() const {
+    auto p = representation();
+    if (p == nullptr) {
+      return 0;
+    } else {
+      auto s = static_cast<std::size_t>(p[1]);
+      return s;
+    }
+  }
+
+  /// Returns an iterator to the beginning of type arguments.
+  TypeHeader const* arguments_begin() const {
+    auto p = representation();
+    if (p == nullptr) {
+      return nullptr;
+    } else {
+      auto a = reinterpret_cast<TypeHeader*>(p + 2);
+      return a;
+    }
+  }
+
+  /// Returns an iterator to the end of the type arguments.
+  TypeHeader const* arguments_end() const {
+    auto p = representation();
+    if (p == nullptr) {
+      return nullptr;
+    } else {
+      auto s = static_cast<std::size_t>(p[1]);
+      auto a = reinterpret_cast<TypeHeader*>(p + 2);
+      return a + s;
+    }
+  }
+
+  /// Returns a hash of the notional value of `this`.
+  constexpr std::size_t hash_value() const {
     Hasher h;
-    h.combine(name);
-    h.combine(arguments.begin(), arguments.end());
+    h.combine(name());
+    h.combine(arguments_begin(), arguments_end());
     return h.finalize();
   }
 
-  std::string description() const override {
-    std::stringstream o;
-    o << name;
-    if (!arguments.empty()) {
-      o << "<";
-      auto f = true;
-      for (auto a : arguments) {
-        if (f) { f = false; } else { o << ", "; }
-        o << a->description();
+  /// Returns `true` iff `this` is equal to `other`.
+  constexpr inline bool equal_to(TypeHeader const& other) const {
+    auto that = other.as<CompositeHeader<tag>>();
+    return (that != nullptr) && (*this == *that);
+  }
+
+  /// Returns `true` iff `this` is equal to `other`.
+  bool operator==(CompositeHeader const& other) const {
+    if (this->raw_value == other.raw_value) {
+      return true;
+    } else if (this->name() == other.name()) {
+      auto lb = this->arguments_begin();
+      auto le = this->arguments_end();
+      auto rb = other.arguments_begin();
+      auto re = other.arguments_end();
+      return std::equal(lb, le, rb, re);
+    } else {
+      return false;
+    }
+  }
+
+  /// Returns a description of the type identified by this instance.
+  std::string description() const {
+    std::stringstream s;
+    s << name();
+    auto b = arguments_begin();
+    auto e = arguments_end();
+
+    if (b != e) {
+      s << "<";
+      auto i = b;
+      while (i != e) {
+        if (i != b) { s << ", "; }
+        s << i->description();
+        ++i;
       }
-      o << ">";
+      s << ">";
     }
-    return o.str();
+
+    return s.str();
   }
 
-protected:
-
-  bool is_trivial(TypeStore const&) const override;;
-
-  std::size_t size(TypeStore const&) const override;
-
-  std::size_t alignment(TypeStore const&) const override;
-
-};
-
-/// The header of a product type.
-struct StructHeader final : public CompositeHeader {
-
-  /// Creates an instance with the given properties.
-  constexpr StructHeader(
-    const char* name, std::initializer_list<TypeHeader const*> arguments
-  ) : CompositeHeader(name, arguments) {}
-
-  constexpr bool equal_to(TypeHeader const& other) const override {
-    auto const* that = dynamic_cast<StructHeader const*>(&other);
-    if (that != nullptr) {
-      return (this->name == that->name) && (this->arguments == that->arguments);
-    } else {
-      return false;
-    }
+  /// Returns a pointer to `this` as a polymorphic type header.
+  inline constexpr TypeHeader const* widened() const {
+    return static_cast<TypeHeader const*>(static_cast<void const*>(this));
   }
-
-private:
-
-  void copy_initialize(void*, void*, TypeStore const&) const override;
-
-  void deinitialize(void*, TypeStore const&) const override;
-
-  void dump_instance(std::ostream&, void*, TypeStore const&) const override;
-
-};
-
-/// The header of a sum type.
-struct EnumHeader final : public CompositeHeader {
-
-  /// Creates an instance with the given properties.
-  constexpr EnumHeader(
-     const char* name, std::initializer_list<TypeHeader const*> arguments
-   ) : CompositeHeader(name, arguments) {}
-
-  constexpr bool equal_to(TypeHeader const& other) const override {
-    auto const* that = dynamic_cast<EnumHeader const*>(&other);
-    if (that != nullptr) {
-      return (this->name == that->name) && (this->arguments == that->arguments);
-    } else {
-      return false;
-    }
-  }
-
-private:
-
-  void copy_initialize(void*, void*, TypeStore const&) const override;
-
-  void deinitialize(void*, TypeStore const&) const override;
-
-  void dump_instance(std::ostream&, void*, TypeStore const&) const override;
 
 };
 
@@ -274,8 +321,8 @@ private:
 template<>
 struct std::hash<xst::TypeHeader> {
 
-  std::size_t operator()(xst::TypeHeader const& i) const {
-    return i.hash_value();
+  std::size_t operator()(xst::TypeHeader const& h) const {
+    return h.hash_value();
   }
 
 };

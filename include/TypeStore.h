@@ -1,5 +1,6 @@
 #pragma once
 
+// #include "TypeHeader.h"
 #include "TypeHeader.h"
 #include "Utilities.h"
 
@@ -54,8 +55,6 @@ struct Metatype {
 struct TypeStore {
 private:
 
-  friend CompositeHeader;
-
   /// An array containing the type ifentifiers allocated in this store.
   std::vector<std::unique_ptr<TypeHeader>> identifiers;
 
@@ -98,34 +97,44 @@ public:
   /// Returns a pointer to the unique instance equal to `identifier` in this store.
   template<typename T>
   T const* declare(T&& identifier) {
-    auto entry = metatype.find(DereferencingKey<TypeHeader>{&identifier});
+    auto entry = metatype.find(DereferencingKey<TypeHeader>{identifier.widened()});
 
     // The identifier is already known.
     if (entry != metatype.end()) {
-      return static_cast<T const*>(entry->first.value);
+      return entry->first.value->as<T>();
     }
 
     // The identifier is unknown; intern it.
     else {
-      identifiers.emplace_back(std::make_unique<T>(std::move(identifier)));
+      identifiers.emplace_back(std::make_unique<TypeHeader>(std::move(identifier)));
       auto const* p = identifiers.back().get();
       metatype.emplace(std::make_pair(DereferencingKey{p}, Metatype{}));
-      return static_cast<T const*>(p);
+      return p->as<T>();
     }
   }
 
   /// Returns a pointer to the unique instance identifying `tag` in this store.
-  inline BuiltinHeader const* declare(BuiltinHeader::Value tag) {
+  inline BuiltinHeader const* declare(BuiltinHeader::Tag tag) {
     return declare(BuiltinHeader{tag});
   }
 
   /// Returns a pointer to the unique instance identifying `tag`, declaring it if necessary.
-  inline BuiltinHeader const* get(BuiltinHeader::Value tag) {
+  inline BuiltinHeader const* get(BuiltinHeader::Tag tag) {
     return declare(BuiltinHeader{tag});
   }
 
   /// Returns `true` iff `type` has been declared and defined in `this`.
-  bool defined(TypeHeader const* type) const;
+  inline bool defined(TypeHeader const* t) const {
+    auto entry = metatype.find(DereferencingKey<TypeHeader>{t});
+    return (entry != metatype.end()) && entry->second.defined();
+  }
+
+  /// Returns `true` iff `type` has been declared and defined in `this`.
+  template<TypeHeader::Tag tag>
+  inline bool defined(CompositeHeader<tag> const* t) const {
+    auto entry = metatype.find(DereferencingKey<TypeHeader>{t->widened()});
+    return (entry != metatype.end()) && entry->second.defined();
+  }
 
   /// Assigns a metatype definition to `type`.
   ///
@@ -145,9 +154,7 @@ public:
   /// Returns `true` iff instances of `type` do not involve out-of-line storage.
   ///
   /// - Requires `type` has been declared and defined in `this`.
-  inline bool is_trivial(TypeHeader const* type) const {
-    return type->is_trivial(*this);
-  }
+  bool is_trivial(TypeHeader const* type) const;
 
   /// Returns `true` iff none of the fields in `m` involves out-of-line storage.
   bool is_trivial(Metatype const& m) const;
@@ -155,8 +162,19 @@ public:
   /// Returns the size of an instance of `t`.
   ///
   /// - Requires: `type` has been declared and defined in `this`.
-  inline std::size_t size(TypeHeader const* type) const {
-    return type->size(*this);
+  std::size_t size(TypeHeader const* type) const;
+
+  /// Returns the size of an instance of `t`.
+  std::size_t size(BuiltinHeader const* type) const;
+
+  /// Returns the size of an instance of `t`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this`.
+  template<TypeHeader::Tag tag>
+  std::size_t size(CompositeHeader<tag> const* type) const {
+    auto const& m = (*this)[type->widened()];
+    // precondition(m.defined(), type->description() + " is not defined");
+    return cache.at(m.cache_begin);
   }
 
   /// Returns the size of `field`.
@@ -169,8 +187,19 @@ public:
   /// Returns the alignment of an instance of `type`.
   ///
   /// - Requires: `type` has been declared and defined in `this`.
-  inline std::size_t alignment(TypeHeader const* type) const {
-    return type->alignment(*this);
+  std::size_t alignment(TypeHeader const* type) const;
+
+  /// Returns the alignment of an instance of `type`.
+  std::size_t alignment(BuiltinHeader const* type) const;
+
+  /// Returns the size of an instance of `t`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this`.
+  template<TypeHeader::Tag tag>
+  std::size_t alignment(CompositeHeader<tag> const* type) const {
+    auto const& m = (*this)[type->widened()];
+    // precondition(m.defined(), type->description() + " is not defined");
+    return cache.at(m.cache_begin + 1);
   }
 
   /// Returns the alignment of `field`.
@@ -269,7 +298,7 @@ public:
   /// - Requires: `type` has been declared and defined in `this`.
   template<typename T>
   inline void copy_initialize_builtin(BuiltinHeader const* type, void* target, T source) const {
-    if (size(type) != sizeof(T)) { throw std::invalid_argument("bad source"); }
+    if (size(type->widened()) != sizeof(T)) { throw std::invalid_argument("bad source"); }
     copy_initialize(type, target, &source);
   }
 
@@ -284,16 +313,32 @@ public:
   /// Initializes `target` with a copy of the instance of `type` that is stored at `source`.
   ///
   /// - Requires: `type` has been declared and defined in `this`.
-  inline void copy_initialize(TypeHeader const* type, void* target, void* source) const {
-    type->copy_initialize(target, source, *this);
-  }
+  void copy_initialize(TypeHeader const* type, void* target, void* source) const;
+
+  /// Initializes `target` with a copy of the instance of `type` that is stored at `source`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this`.
+  void copy_initialize(EnumHeader const* type, void* target, void* source) const;
+
+  /// Initializes `target` with a copy of the instance of `type` that is stored at `source`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this`.
+  void copy_initialize(StructHeader const* type, void* target, void* source) const;
 
   /// Destroys the instance of `type` that is stored at `source`.
   ///
   /// - Requires: `type` has been declared and defined in `this`.
-  inline void deinitialize(TypeHeader const* type, void* source) const {
-    type->deinitialize(source, *this);
-  }
+  void deinitialize(TypeHeader const* type, void* source) const;
+
+  /// Destroys the instance of `type` that is stored at `source`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this`.
+  void deinitialize(EnumHeader const* type, void* source) const;
+
+  /// Destroys the instance of `type` that is stored at `source`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this`.
+  void deinitialize(StructHeader const* type, void* source) const;
 
   /// Deinitializes the value of `field`, which is stored at `source`.
   ///
@@ -304,9 +349,23 @@ public:
   /// instance of `type`.
   ///
   /// - Requires: `type` has been declared and defined in `this` and `source` is initialzed.
-  inline void dump_instance(std::ostream& stream, TypeHeader const* type, void* source) const {
-    type->dump_instance(stream, source, *this);
-  }
+  void dump_instance(std::ostream& stream, TypeHeader const* type, void* source) const;
+
+  /// Writes to `stream` a textual representation of the value stored at `source`, which is an
+  /// instance of `type`.
+  void dump_instance(std::ostream& stream, BuiltinHeader const* type, void* source) const;
+
+  /// Writes to `stream` a textual representation of the value stored at `source`, which is an
+  /// instance of `type`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this` and `source` is initialzed.
+  void dump_instance(std::ostream& stream, EnumHeader const* type, void* source) const;
+
+  /// Writes to `stream` a textual representation of the value stored at `source`, which is an
+  /// instance of `type`.
+  ///
+  /// - Requires: `type` has been declared and defined in `this` and `source` is initialzed.
+  void dump_instance(std::ostream& stream, StructHeader const* type, void* source) const;
 
   /// Returns a description of the value stored at `source`, which is an instance of `type`.
   inline std::string describe_instance(TypeHeader const* type, void* source) const {

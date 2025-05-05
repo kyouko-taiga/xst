@@ -1,7 +1,4 @@
-#include "TypeHeader.h"
 #include "TypeStore.h"
-
-#include <cassert>
 
 namespace xst {
 
@@ -72,13 +69,8 @@ Metatype& TypeStore::initialize_metatype(TypeHeader const* t) {
   }
 }
 
-bool TypeStore::defined(TypeHeader const* t) const {
-  auto entry = metatype.find(DereferencingKey<TypeHeader>{t});
-  return (entry != metatype.end()) && entry->second.defined();
-}
-
 Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fields) {
-  auto& m = initialize_metatype(t);
+  auto& m = initialize_metatype(t->widened());
   auto begin = static_cast<uint32_t>(cache.size());
 
   // Define the fields.
@@ -106,7 +98,7 @@ Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fi
 }
 
 Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fields) {
-  auto& m = initialize_metatype(t);
+  auto& m = initialize_metatype(t->widened());
   auto begin = static_cast<uint32_t>(cache.size());
 
   // Define the fields.
@@ -170,105 +162,85 @@ void* TypeStore::address_of(Metatype const& m, std::size_t i, void* base) const 
   }
 }
 
+bool TypeStore::is_trivial(TypeHeader const* h) const {
+  switch (h->tag()) {
+    case none_tag:
+      return false;
+
+    case builtin_tag:
+      return true;
+
+    case enum_tag:
+    case struct_tag:
+      auto const& m = (*this)[h];
+      precondition(m.defined(), h->description() + " is not defined");
+      return is_trivial(m);
+  }
+}
+
 bool TypeStore::is_trivial(Metatype const& m) const {
   return std::all_of(m.fields.begin(), m.fields.end(), [&](auto const& f) {
     return !f.out_of_line() && is_trivial(f.type());
   });
 }
 
-bool LambdaHeader::is_trivial(TypeStore const&) const {
-  return false;
-}
-
-bool CompositeHeader::is_trivial(TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
-  return store.is_trivial(m);
-}
-
-std::size_t BuiltinHeader::size(TypeStore const&) const {
-  switch (raw_value) {
-    case Value::boolean: return alignof(bool);
-    case Value::i32: return alignof(int32_t);
-    case Value::i64: return alignof(int64_t);
-    case Value::str: return alignof(char const*);
+std::size_t TypeStore::size(TypeHeader const* h) const {
+  switch (h->tag()) {
+    case none_tag:
+      return 0;
+    case builtin_tag:
+      return size(h->as<BuiltinHeader>());
+    case enum_tag:
+      return size(h->as<EnumHeader>());
+    case struct_tag:
+      return size(h->as<StructHeader>());
   }
 }
 
-void BuiltinHeader::copy_initialize(void* target, void* source, TypeStore const& store) const {
-  memcpy(target, source, size(store));
-}
-
-void BuiltinHeader::deinitialize(void* source, TypeStore const&) const {};
-
-std::size_t BuiltinHeader::alignment(TypeStore const&) const {
-  switch (raw_value) {
-    case Value::boolean: return alignof(bool);
-    case Value::i32: return alignof(int32_t);
-    case Value::i64: return alignof(int64_t);
-    case Value::str: return alignof(char const*);
+std::size_t TypeStore::size(BuiltinHeader const* h) const {
+  switch (h->tag()) {
+    case BuiltinHeader::boolean:
+      return alignof(bool);
+    case BuiltinHeader::i32:
+      return alignof(int32_t);
+    case BuiltinHeader::i64:
+      return alignof(int64_t);
+    case BuiltinHeader::str:
+      return alignof(char const*);
   }
 }
 
-std::size_t LambdaHeader::size(TypeStore const& store) const {
-  return sizeof(void*) + sizeof(void*);
-}
-
-std::size_t LambdaHeader::alignment(TypeStore const& store) const {
-  return alignof(void*);
-}
-
-void LambdaHeader::copy_initialize(void* target, void* source, TypeStore const& store) const {
-  precondition(false, "TODO");
-}
-
-void LambdaHeader::deinitialize(void* source, TypeStore const&) const {
-  precondition(false, "TODO");
-};
-
-std::size_t CompositeHeader::size(TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
-  return store.cache.at(m.cache_begin);
-}
-
-std::size_t CompositeHeader::alignment(TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
-  return store.cache.at(m.cache_begin + 1);
-}
-
-void StructHeader::copy_initialize(void* target, void* source, TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
-
-  if (store.is_trivial(m)) {
-    memcpy(target, source, size(store));
-  } else {
-    for (auto i = 0; i < m.fields.size(); ++i) {
-      auto t = store.address_of(m, i, target);
-      auto s = store.address_of(m, i, source);
-      store.copy_initialize(m.fields[i].type(), t, s);
-    }
+std::size_t TypeStore::alignment(TypeHeader const* h) const {
+  switch (h->tag()) {
+    case none_tag:
+      return 0;
+    case builtin_tag:
+      return alignment(h->as<BuiltinHeader>());
+    case enum_tag:
+      return alignment(h->as<EnumHeader>());
+    case struct_tag:
+      return alignment(h->as<StructHeader>());
   }
 }
 
-void StructHeader::deinitialize(void* source, TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
-
-  for (auto i = 0; i < m.fields.size(); ++i) {
-    auto s = store.address_of(m, i, source);
-    auto f = m.fields[i];
-    store.deinitialize(f, s);
+std::size_t TypeStore::alignment(BuiltinHeader const* h) const {
+  switch (h->tag()) {
+    case BuiltinHeader::boolean:
+      return alignof(bool);
+    case BuiltinHeader::i32:
+      return alignof(int32_t);
+    case BuiltinHeader::i64:
+      return alignof(int64_t);
+    case BuiltinHeader::str:
+      return alignof(char const*);
   }
-};
+}
 
 void TypeStore::copy_initialize_enum(
-  EnumHeader const* type, std::size_t tag, void* target, void* source
+  EnumHeader const* h, std::size_t tag, void* target, void* source
 ) const {
-  auto const& m = (*this)[type];
-  precondition(m.defined(), type->description() + " is not defined");
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
 
   // Copy the payload.
   auto t0 = address_of(m, 0, target);
@@ -279,35 +251,87 @@ void TypeStore::copy_initialize_enum(
   *t1 = static_cast<uint16_t>(tag);
 }
 
-void EnumHeader::copy_initialize(void* target, void* source, TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
+void TypeStore::copy_initialize(TypeHeader const* h, void* target, void* source) const {
+  switch (h->tag()) {
+    case none_tag:
+      return;
+    case builtin_tag:
+      memcpy(target, source, size(h));
+    case enum_tag:
+      return copy_initialize(h->as<EnumHeader>(), target, source);
+    case struct_tag:
+      return copy_initialize(h->as<StructHeader>(), target, source);
+  }
+}
 
-  if (store.is_trivial(m)) {
-    memcpy(target, source, size(store));
+void TypeStore::copy_initialize(EnumHeader const* h, void* target, void* source) const {
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
+
+  if (is_trivial(m)) {
+    memcpy(target, source, size(h->widened()));
   } else {
-    auto tag = static_cast<uint16_t*>(store.address_of(m, 1, source));
+    auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
     auto f = m.fields.at(*tag);
 
     // Copy the payload.
-    auto t0 = store.address_of(m, 0, target);
-    auto s0 = store.address_of(m, 0, source);
-    store.copy_initialize(f.type(), t0, s0);
+    auto t0 = address_of(m, 0, target);
+    auto s0 = address_of(m, 0, source);
+    copy_initialize(f.type(), t0, s0);
 
     // Copy the tag.
-    auto t1 = static_cast<uint16_t*>(store.address_of(m, 1, target));
+    auto t1 = static_cast<uint16_t*>(address_of(m, 1, target));
     *t1 = static_cast<uint16_t>(*tag);
   }
 }
 
-void EnumHeader::deinitialize(void* source, TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
+void TypeStore::copy_initialize(StructHeader const* h, void* target, void* source) const {
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
 
-  auto tag = static_cast<uint16_t*>(store.address_of(m, 1, source));
-  auto s = store.address_of(m, 0, source);
+  if (is_trivial(m)) {
+    memcpy(target, source, size(h->widened()));
+  } else {
+    for (auto i = 0; i < m.fields.size(); ++i) {
+      auto t = address_of(m, i, target);
+      auto s = address_of(m, i, source);
+      copy_initialize(m.fields[i].type(), t, s);
+    }
+  }
+}
+
+inline void TypeStore::deinitialize(TypeHeader const* h, void* source) const {
+  switch (h->tag()) {
+    case none_tag:
+      return;
+    case builtin_tag:
+      return;
+    case enum_tag:
+      return deinitialize(h->as<EnumHeader>(), source);
+    case struct_tag:
+      return deinitialize(h->as<StructHeader>(), source);
+  }
+}
+
+void TypeStore::deinitialize(EnumHeader const* h, void* source) const {
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
+
+  auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
+  auto s = address_of(m, 0, source);
   auto f = m.fields.at(*tag);
-  store.deinitialize(f, s);
+  deinitialize(f, s);
+};
+
+void TypeStore::deinitialize(StructHeader const* h, void* source) const {
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
+
+  for (auto i = 0; i < m.fields.size(); ++i) {
+    auto s = address_of(m, i, source);
+    auto f = m.fields[i];
+    deinitialize(f, s);
+  }
 };
 
 void TypeStore::deinitialize(Field const& f, void* s) const {
@@ -317,48 +341,56 @@ void TypeStore::deinitialize(Field const& f, void* s) const {
   }
 }
 
-void BuiltinHeader::dump_instance(std::ostream& o, void* s, TypeStore const&) const {
-  switch (raw_value) {
-    case Value::boolean:
-      o << (*static_cast<bool*>(s) ? "true" : "false"); break;
-    case Value::i32:
-      o << *static_cast<int32_t*>(s); break;
-    case Value::i64:
-      o << *static_cast<int64_t*>(s); break;
-    case Value::str:
-      o << *static_cast<char const**>(s); break;
+void TypeStore::dump_instance(std::ostream& s, TypeHeader const* h, void* source) const {
+  switch (h->tag()) {
+    case none_tag:
+      s << "nil"; break;
+    case builtin_tag:
+      dump_instance(s, h->as<BuiltinHeader>(), source); break;
+    case enum_tag:
+      dump_instance(s, h->as<EnumHeader>(), source); break;
+    case struct_tag:
+      dump_instance(s, h->as<StructHeader>(), source); break;
   }
 }
 
-void LambdaHeader::dump_instance(std::ostream& o, void* s, TypeStore const&) const {
-  precondition(false, "TODO");
-}
-
-void StructHeader::dump_instance(std::ostream& o, void* source, TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
-
-  o << description() << "(";
-  for (auto i = 0; i < m.fields.size(); ++i) {
-    if (i > 0) { o << ", "; }
-    auto s = store.address_of(m, i, source);
-    store.dump_instance(o, m.fields[i].type(), s);
+void TypeStore::dump_instance(std::ostream& s, BuiltinHeader const* h, void* source) const {
+  switch (h->tag()) {
+    case BuiltinHeader::boolean:
+      s << (*static_cast<bool*>(source) ? "true" : "false"); break;
+    case BuiltinHeader::i32:
+      s << *static_cast<int32_t*>(source); break;
+    case BuiltinHeader::i64:
+      s << *static_cast<int64_t*>(source); break;
+    case BuiltinHeader::str:
+      s << *static_cast<char const**>(source); break;
   }
-  o << ")";
 }
 
-void EnumHeader::dump_instance(std::ostream& o, void* source, TypeStore const& store) const {
-  auto const& m = store[this];
-  precondition(m.defined(), description() + " is not defined");
+void TypeStore::dump_instance(std::ostream& s, EnumHeader const* h, void* source) const {
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
 
-
-  auto tag = static_cast<uint16_t*>(store.address_of(m, 1, source));
-  auto s = store.address_of(m, 0, source);
+  auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
+  auto p = address_of(m, 0, source);
   auto f = m.fields.at(*tag);
 
-  o << description() << "(";
-  store.dump_instance(o, f.type(), s);
-  o << ")";
+  s << h->description() << "(";
+  dump_instance(s, f.type(), p);
+  s << ")";
+}
+
+void TypeStore::dump_instance(std::ostream& s, StructHeader const* h, void* source) const {
+  auto const& m = (*this)[h->widened()];
+  precondition(m.defined(), h->description() + " is not defined");
+
+  s << h->description() << "(";
+  for (auto i = 0; i < m.fields.size(); ++i) {
+    if (i > 0) { s << ", "; }
+    auto p = address_of(m, i, source);
+    dump_instance(s, m.fields[i].type(), p);
+  }
+  s << ")";
 }
 
 }
