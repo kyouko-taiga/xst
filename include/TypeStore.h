@@ -54,8 +54,6 @@ struct Metatype {
 struct TypeStore {
 private:
 
-  friend CompositeHeader;
-
   /// An array containing the type ifentifiers allocated in this store.
   std::vector<std::unique_ptr<TypeHeader>> identifiers;
 
@@ -149,6 +147,17 @@ public:
     return type->is_trivial(*this);
   }
 
+  /// Implements `is_trivial` for built-in types.
+  constexpr bool is_trivial(BuiltinHeader const*) const {
+    return true;
+  }
+
+  /// Implements `is_trivial` for lambda types.
+  bool is_trivial(LambdaHeader const*) const;
+
+  /// Implements `is_trivial` for nominal types.
+  bool is_trivial(CompositeHeader const*) const;
+
   /// Returns `true` iff none of the fields in `m` involves out-of-line storage.
   bool is_trivial(Metatype const& m) const;
 
@@ -158,6 +167,26 @@ public:
   inline std::size_t size(TypeHeader const* type) const {
     return type->size(*this);
   }
+
+  /// Implements `size` for built-in types.
+  constexpr std::size_t size(BuiltinHeader const* h) const {
+    switch (h->raw_value) {
+      case BuiltinHeader::boolean:
+        return sizeof(bool);
+      case BuiltinHeader::i32:
+        return sizeof(int32_t);
+      case BuiltinHeader::i64:
+        return sizeof(int64_t);
+      case BuiltinHeader::str:
+        return sizeof(char const*);
+    }
+  }
+
+  /// Implements `size` for lambda types.
+  std::size_t size(LambdaHeader const*) const;
+
+  /// Implements `size` for nominal types.
+  std::size_t size(CompositeHeader const*) const;
 
   /// Returns the size of `field`.
   ///
@@ -172,6 +201,28 @@ public:
   inline std::size_t alignment(TypeHeader const* type) const {
     return type->alignment(*this);
   }
+
+  /// Implements `alignment` for built-in types.
+  constexpr std::size_t alignment(BuiltinHeader const* h) const {
+    switch (h->raw_value) {
+      case BuiltinHeader::boolean:
+        return alignof(bool);
+      case BuiltinHeader::i32:
+        return alignof(int32_t);
+      case BuiltinHeader::i64:
+        return alignof(int64_t);
+      case BuiltinHeader::str:
+        return alignof(char const*);
+    }
+  }
+
+  /// Implements `alignment` for lambda types.
+  constexpr std::size_t alignment(LambdaHeader const*) const {
+    return alignof(void*);
+  }
+
+  /// Implements `alignment` for nominal types.
+  std::size_t alignment(CompositeHeader const*) const;
 
   /// Returns the alignment of `field`.
   ///
@@ -288,12 +339,38 @@ public:
     type->copy_initialize(target, source, *this);
   }
 
+  /// Implements `copy_initialize` for built-in types.
+  inline void copy_initialize(BuiltinHeader const* h, void* target, void* source) const {
+    memcpy(target, source, size(h));
+  }
+
+  /// Implements `copy_initialize` for lambda types.
+  void copy_initialize(LambdaHeader const* h, void* target, void* source) const;
+
+  /// Implements `copy_initialize` for struct types.
+  void copy_initialize(StructHeader const* h, void* target, void* source) const;
+
+  /// Implements `copy_initialize` for enum types.
+  void copy_initialize(EnumHeader const* h, void* target, void* source) const;
+
   /// Destroys the instance of `type` that is stored at `source`.
   ///
   /// - Requires: `type` has been declared and defined in `this`.
   inline void deinitialize(TypeHeader const* type, void* source) const {
     type->deinitialize(source, *this);
   }
+
+  /// Implements `deinitialize` for built-in types.
+  inline void deinitialize(BuiltinHeader const* h, void* source) const {}
+
+  /// Implements `deinitialize` for lambda types.
+  void deinitialize(LambdaHeader const* h, void* source) const;
+
+  /// Implements `deinitialize` for struct types.
+  void deinitialize(StructHeader const* h, void* source) const;
+
+  /// Implements `deinitialize` for enum types.
+  void deinitialize(EnumHeader const* h, void* source) const;
 
   /// Deinitializes the value of `field`, which is stored at `source`.
   ///
@@ -307,6 +384,18 @@ public:
   inline void dump_instance(std::ostream& stream, TypeHeader const* type, void* source) const {
     type->dump_instance(stream, source, *this);
   }
+
+  /// Implements `dump_instance` for built-in types.
+  void dump_instance(std::ostream& stream, BuiltinHeader const* type, void* source) const;
+
+  /// Implements `dump_instance` for lambda types.
+  void dump_instance(std::ostream& stream, LambdaHeader const* type, void* source) const;
+
+  /// Implements `dump_instance` for struct types.
+  void dump_instance(std::ostream& stream, StructHeader const* type, void* source) const;
+
+  /// Implements `dump_instance` for enum types.
+  void dump_instance(std::ostream& stream, EnumHeader const* type, void* source) const;
 
   /// Returns a description of the value stored at `source`, which is an instance of `type`.
   inline std::string describe_instance(TypeHeader const* type, void* source) const {

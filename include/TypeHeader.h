@@ -102,7 +102,9 @@ struct BuiltinHeader final : public TypeHeader {
 
 private:
 
-  inline bool is_trivial(TypeStore const&) const override { return true; };
+  constexpr bool is_trivial(TypeStore const&) const override {
+    return true;
+  };
 
   std::size_t size(TypeStore const&) const override;
 
