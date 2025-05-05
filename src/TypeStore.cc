@@ -322,6 +322,8 @@ void TypeStore::deinitialize(StructHeader const* h, void* source) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
 
+  if (is_trivial(m)) { return; }
+
   for (auto i = 0; i < m.fields.size(); ++i) {
     auto s = address_of(m, i, source);
     auto f = m.fields[i];
@@ -336,6 +338,8 @@ void StructHeader::deinitialize(void* source, TypeStore const& s) const {
 void TypeStore::deinitialize(EnumHeader const* h, void* source) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
+
+  if (is_trivial(m)) { return; }
 
   auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
   auto s = address_of(m, 0, source);
