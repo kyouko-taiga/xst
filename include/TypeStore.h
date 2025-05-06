@@ -3,18 +3,16 @@
 #include "TypeHeader.h"
 #include "Utilities.h"
 
+#include <span>
 #include <unordered_map>
 
 namespace xst {
 
 /// A type identifier and a flag that is set if its instance is stored indirectly.
 struct Field {
-private:
 
-  /// A pointer to a type header and a bit represented by the least significant bit.
+  /// An unowned pointer to a type header and a bit represented by the least significant bit.
   uintptr_t raw_value;
-
-public:
 
   /// Creates an instance with the given properties.
   inline Field(
@@ -35,20 +33,99 @@ public:
 
 /// Information about the runtime type of a value.
 struct Metatype {
+private:
 
-  /// The stored properties of the type.
-  std::vector<Field> fields;
+  uintptr_t data;
 
-  /// The offset of the cache storing the computed properties of this instance.
-  ///
-  /// The metatype is considered undefined if all the bits of the property are set.
-  uint32_t cache_begin = std::numeric_limits<uint32_t>::max();
-
-  /// Returns `true` iff `this` has been defined.
-  inline bool defined() const {
-    return cache_begin != std::numeric_limits<uint32_t>::max();
+  /// Returns a pointer to this instance's payload iff it is defined and stored stored out-of-line.
+  /// Otherwise, returns `nullptr`.
+  inline std::size_t* base_address() const {
+    return ((data == 0) || (data & 1)) ? nullptr : reinterpret_cast<std::size_t*>(data);
   }
 
+public:
+
+  Metatype() : data(0) {};
+
+  Metatype(
+    std::size_t size, std::size_t alignment,
+    std::vector<Field>&& fields,
+    std::vector<std::size_t>&& offsets
+  );
+
+  Metatype(Metatype const&) = delete;
+
+  Metatype& operator=(Metatype const&)= delete;
+
+  Metatype(Metatype&& other) : data(other.data) { other.data = 0; }
+
+  Metatype& operator=(Metatype&& other) {
+    delete base_address();
+    this->data = other.data;
+    other.data = 0;
+    return *this;
+  }
+
+  ~Metatype() {
+    delete base_address();
+  }
+
+  /// Returns `true` if this instance is defined.
+  inline bool defined() const {
+    return data != 0;
+  }
+
+  /// Returns the size of the described type.
+  inline std::size_t size() const {
+    auto base = base_address();
+    if (base == nullptr) {
+      return static_cast<std::size_t>((data >> 32) & 0xffff);
+    } else {
+      return base[0];
+    }
+  }
+
+  /// Returns the alignment of the described type.
+  inline std::size_t alignment() const {
+    auto base = base_address();
+    if (base == nullptr) {
+      return static_cast<std::size_t>((data >> 16) & 0xffff);
+    } else {
+      return base[1];
+    }
+  }
+
+  /// Returns the fields of the described type, if any.
+  std::span<Field const> fields() const {
+    auto base = base_address();
+    if (base == nullptr) {
+      return std::span<Field const>{};
+    } else {
+      auto s = base[2];
+      auto b = static_cast<Field const*>(static_cast<void*>(base + 3));
+      return std::span<Field const>{b, s};
+    }
+  }
+
+  /// Returns the offsets of the described type, if any.
+  std::span<std::size_t> offsets() const {
+    auto base = base_address();
+    if (base == nullptr) {
+      return std::span<std::size_t>{};
+    } else {
+      auto s = base[2];
+      auto b = base + 3 + s;
+      return std::span<std::size_t>{b, s};
+    }
+  }
+
+};
+
+template<typename Header>
+struct MetatypeConstructor {
+  Metatype operator()(Header const*, TypeStore&) {
+    return Metatype{};
+  }
 };
 
 struct TypeStore {
@@ -59,20 +136,6 @@ private:
 
   /// A table from a type identifier to its corresponding metatype.
   std::unordered_map<DereferencingKey<TypeHeader>, Metatype> metatype;
-
-  /// An array containing the size, alignment, and field offsets of struct metatypes.
-  ///
-  /// This array caches the size, alignment, and field offsets of composite types that have been
-  /// defined in this store. Each set of property is stored contiguously from an offset that is
-  /// stored in the corresponding metatype once it has been defined.
-  ///
-  /// The offset of the first field, which is always 0, is not stored cached. For instance, if the
-  /// metatype of a struct is defined as a pair `{i64, i32}`, the cache will contain a subsequence
-  /// `[12, 8, 8]` assuming `i64` is aligned at 8. The first element is the size of an instance,
-  /// the second is its alignment, the last is the offset of the second component of the pair.
-  ///
-  /// The computed properties of built-in and function types are not cached.
-  mutable std::vector<uint32_t> cache;
 
   /// Initializes the definition of `t`'s metatype.
   ///
@@ -94,7 +157,7 @@ public:
   }
 
   /// Returns a pointer to the unique instance equal to `identifier` in this store.
-  template<typename T>
+  template<typename T, typename M = MetatypeConstructor<T>>
   T const* declare(T&& identifier) {
     auto entry = metatype.find(DereferencingKey<TypeHeader>{&identifier});
 
@@ -107,8 +170,9 @@ public:
     else {
       identifiers.emplace_back(std::make_unique<T>(std::move(identifier)));
       auto const* p = identifiers.back().get();
-      metatype.emplace(std::make_pair(DereferencingKey{p}, Metatype{}));
-      return static_cast<T const*>(p);
+      auto const* q = static_cast<T const*>(p);
+      metatype.emplace(std::make_pair(DereferencingKey{p}, M{}(q, *this)));
+      return q;
     }
   }
 
@@ -249,12 +313,7 @@ public:
   /// - Requires: `m` is the metatype of a product or sum type that has been declared and defined
   ///   in `this`, and `i` is less the number of fields in `m`.
   inline std::size_t offset(Metatype const& m, std::size_t i) const {
-    if ((i == 0) || m.fields.empty()) {
-      return 0;
-    } else {
-      // The field at index 0 has no offset and isn't stored in the cache.
-      return static_cast<std::size_t>(cache.at(m.cache_begin + i + 1));
-    }
+    return m.offsets()[i];
   }
 
   /// Returns the offset of the `i`-th field of `type`.
@@ -262,7 +321,7 @@ public:
   /// - Requires: `type` has been declared and defined in `this` and `i` is less the number of
   ///   fields in an instance of `type`.
   inline std::size_t offset(TypeHeader const* type, std::size_t i) const {
-    auto m = (*this)[type];
+    auto const& m = (*this)[type];
     return offset(m, i);
   }
 

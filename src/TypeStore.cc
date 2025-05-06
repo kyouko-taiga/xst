@@ -48,10 +48,10 @@ void aligned_free(void* p) {
 }
 
 /// Returns the number of bytes before the given fields, reading metatypes from `store`.
-std::vector<uint32_t> offsets(
+std::vector<std::size_t> offsets(
   std::vector<Field> const& fields, TypeStore const& store
 ) {
-  std::vector<std::uint32_t> result{0};
+  std::vector<std::size_t> result{0};
   for (auto i = 1; i < fields.size(); ++i) {
     auto const& f = fields[i];
     auto p = result.at(i - 1) + store.size(fields[i - 1]);
@@ -59,6 +59,37 @@ std::vector<uint32_t> offsets(
     result.push_back(static_cast<uint32_t>(q));
   }
   return result;
+}
+
+Metatype::Metatype(
+  std::size_t size, std::size_t alignment,
+  std::vector<Field>&& fields,
+  std::vector<std::size_t>&& offsets
+) {
+  auto field_count = fields.size();
+  precondition(field_count == offsets.size(), "inconsistent fields and offsets");
+
+  // Can we store everything inline?
+  if ((field_count == 0) && !((size | alignment) & ~0xffff) && (sizeof(std::uintptr_t) >= 8)) {
+    data = (size << 32) | (alignment << 16) | 1;
+  }
+
+  // Use out-of-line storage.
+  else {
+    auto buffer = new std::size_t[3 + field_count + field_count];
+    buffer[0] = size;
+    buffer[1] = alignment;
+    buffer[2] = field_count;
+
+    auto f = fields.begin();
+    auto o = offsets.begin();
+    for (auto i = 0; i < field_count; ++i) {
+      buffer[i + 3] = static_cast<std::size_t>((f++)->raw_value);
+      buffer[i + 3 + field_count] = static_cast<std::size_t>(*(o++));
+    }
+
+    data = reinterpret_cast<uintptr_t>(buffer);
+  }
 }
 
 Metatype& TypeStore::initialize_metatype(TypeHeader const* t) {
@@ -79,50 +110,39 @@ bool TypeStore::defined(TypeHeader const* t) const {
 
 Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fields) {
   auto& m = initialize_metatype(t);
-  auto begin = static_cast<uint32_t>(cache.size());
 
-  // Define the fields.
-  m.fields = std::move(fields);
-
-  if (m.fields.empty()) {
-    cache.push_back(0);  // size
-    cache.push_back(1);  // alignment
+  if (fields.empty()) {
+    m = Metatype{0, 1, {}, {}};
   } else {
     // Compute field offsets.
-    auto offsets = xst::offsets(m.fields, *this);
+    auto offsets = xst::offsets(fields, *this);
 
-    // Compute alignment.
+    // Compute size and alignment.
     std::size_t a = 1;
-    for (auto const& f : m.fields) { a = std::max(a, alignment(f)); }
+    for (auto const& f : fields) { a = std::max(a, alignment(f)); }
+    std::size_t s = size(fields.back()) + offsets.back();
 
-    // Fill the cache.
-    cache.push_back(static_cast<uint32_t>(size(m.fields.back())) + offsets.back());
-    cache.push_back(static_cast<uint32_t>(a));
-    std::copy(offsets.begin() + 1, offsets.end(), std::back_inserter(cache));
+    // Define the metatype.
+    m = Metatype{s, a, std::move(fields), std::move(offsets)};
   }
 
-  m.cache_begin = begin;
   return m;
 }
 
 Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fields) {
   auto& m = initialize_metatype(t);
-  auto begin = static_cast<uint32_t>(cache.size());
 
-  // Define the fields.
-  m.fields = std::move(fields);
-
-  if (m.fields.empty()) {
-    cache.push_back(0);  // size
-    cache.push_back(1);  // alignment
-  } if (fields.size() == 1) {
-    cache.push_back(static_cast<uint32_t>(size(m.fields[0])));
-    cache.push_back(static_cast<uint32_t>(alignment(m.fields[0])));
+  if (fields.empty()) {
+    m = Metatype{0, 1, {}, {}};
+  } else if (fields.size() == 1) {
+    auto s = size(fields[0]);
+    auto a = alignment(fields[0]);
+    m = Metatype{s, a, std::move(fields), {0}};
   } else {
     // Compute size and alignment.
     std::size_t s = 0;
     std::size_t a = 1;
-    for (auto const& f : m.fields) {
+    for (auto const& f : fields) {
       s = std::max(s, size(f));
       a = std::max(a, alignment(f));
     }
@@ -130,13 +150,10 @@ Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fiel
     s = tag_offset + sizeof(uint16_t);
     a = std::max(a, alignof(uint16_t));
 
-    // Fill the cache.
-    cache.push_back(static_cast<uint32_t>(s));
-    cache.push_back(static_cast<uint32_t>(a));
-    cache.push_back(static_cast<uint32_t>(tag_offset));
+    // Define the metatype.
+    m = Metatype{s, a, std::move(fields), {0, tag_offset}};
   }
 
-  m.cache_begin = begin;
   return m;
 }
 
@@ -150,7 +167,7 @@ Metatype const& TypeStore::operator[](TypeHeader const* t) const {
 }
 
 void* TypeStore::address_of(Metatype const& m, std::size_t i, void* base) const {
-  auto& field = m.fields.at(i);
+  auto& field = m.fields()[i];
   auto field_address = static_cast<void*>(static_cast<char*>(base) + offset(m, i));
 
   if (field.out_of_line()) {
@@ -190,7 +207,8 @@ bool CompositeHeader::is_trivial(TypeStore const& s) const {
 }
 
 bool TypeStore::is_trivial(Metatype const& m) const {
-  return std::all_of(m.fields.begin(), m.fields.end(), [&](auto const& f) {
+  auto fields = m.fields();
+  return std::all_of(fields.begin(), fields.end(), [&](auto const& f) {
     return !f.out_of_line() && is_trivial(f.type());
   });
 }
@@ -210,7 +228,7 @@ std::size_t LambdaHeader::size(TypeStore const& s) const {
 std::size_t TypeStore::size(CompositeHeader const* h) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
-  return cache.at(m.cache_begin);
+  return m.size();
 }
 
 std::size_t CompositeHeader::size(TypeStore const& s) const {
@@ -228,7 +246,7 @@ std::size_t LambdaHeader::alignment(TypeStore const& s) const {
 std::size_t TypeStore::alignment(CompositeHeader const* h) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
-  return cache.at(m.cache_begin + 1);
+  return m.alignment();
 }
 
 std::size_t CompositeHeader::alignment(TypeStore const& s) const {
@@ -254,10 +272,11 @@ void TypeStore::copy_initialize(StructHeader const* h, void* target, void* sourc
   if (is_trivial(m)) {
     memcpy(target, source, size(h));
   } else {
-    for (auto i = 0; i < m.fields.size(); ++i) {
+    auto fields = m.fields();
+    for (auto i = 0; i < fields.size(); ++i) {
       auto t = address_of(m, i, target);
       auto s = address_of(m, i, source);
-      copy_initialize(m.fields[i].type(), t, s);
+      copy_initialize(fields[i].type(), t, s);
     }
   }
 }
@@ -273,17 +292,19 @@ void TypeStore::copy_initialize(EnumHeader const* h, void* target, void* source)
   if (is_trivial(m)) {
     memcpy(target, source, size(h));
   } else {
+    auto fields = m.fields();
     auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
-    auto f = m.fields.at(*tag);
+    auto f = fields[*tag];
 
     // Copy the payload.
     auto t0 = address_of(m, 0, target);
     auto s0 = address_of(m, 0, source);
     copy_initialize(f.type(), t0, s0);
 
-    // Copy the tag.
-    auto t1 = static_cast<uint16_t*>(address_of(m, 1, target));
-    *t1 = static_cast<uint16_t>(*tag);
+    // Copy the tag, unless there's only one field.
+    if (fields.size() > 1) {
+      *static_cast<uint16_t*>(address_of(m, 1, target)) = static_cast<uint16_t>(*tag);
+    }
   }
 }
 
@@ -299,7 +320,7 @@ void TypeStore::copy_initialize_enum(
 
   // Copy the payload.
   auto t0 = address_of(m, 0, target);
-  copy_initialize(m.fields.at(tag).type(), t0, source);
+  copy_initialize(m.fields()[tag].type(), t0, source);
 
   // Set the tag.
   auto t1 = static_cast<uint16_t*>(address_of(m, 1, target));
@@ -324,9 +345,10 @@ void TypeStore::deinitialize(StructHeader const* h, void* source) const {
 
   if (is_trivial(m)) { return; }
 
-  for (auto i = 0; i < m.fields.size(); ++i) {
+  auto fields = m.fields();
+  for (auto i = 0; i < fields.size(); ++i) {
     auto s = address_of(m, i, source);
-    auto f = m.fields[i];
+    auto f = fields[i];
     deinitialize(f, s);
   }
 };
@@ -343,7 +365,7 @@ void TypeStore::deinitialize(EnumHeader const* h, void* source) const {
 
   auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
   auto s = address_of(m, 0, source);
-  auto f = m.fields.at(*tag);
+  auto f = m.fields()[*tag];
   deinitialize(f, s);
 }
 
@@ -388,10 +410,11 @@ void TypeStore::dump_instance(std::ostream& o, StructHeader const* h, void* sour
   precondition(m.defined(), h->description() + " is not defined");
 
   o << h->description() << "(";
-  for (auto i = 0; i < m.fields.size(); ++i) {
+  auto fields = m.fields();
+  for (auto i = 0; i < fields.size(); ++i) {
     if (i > 0) { o << ", "; }
     auto s = address_of(m, i, source);
-    dump_instance(o, m.fields[i].type(), s);
+    dump_instance(o, fields[i].type(), s);
   }
   o << ")";
 }
@@ -406,7 +429,7 @@ void TypeStore::dump_instance(std::ostream& o, EnumHeader const* h, void* source
 
   auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
   auto s = address_of(m, 0, source);
-  auto f = m.fields.at(*tag);
+  auto f = m.fields()[*tag];
 
   o << h->description() << "(";
   dump_instance(o, f.type(), s);
