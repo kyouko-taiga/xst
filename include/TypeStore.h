@@ -8,11 +8,21 @@
 
 namespace xst {
 
+/// A helper type to initialize metatypes in `TypeStore::declare`.
 template<typename Header>
 struct MetatypeConstructor {
+
+  /// Constructs a metatype for the given header, using the given store.
+  ///
+  /// This method is called in `TypeStore::declare` when a new type header is about to be inserted
+  /// and it returns a new metatype for that header. The default implementation returns an empty
+  /// (i.e., undefined) instance to be defined later by `TypeStore::define`. Specialization of this
+  /// method can return a defined metatype so that the instance associated with a header is defined
+  /// automatically in `TypeStore::declare`.
   Metatype operator()(Header const*, TypeStore&) {
     return Metatype{};
   }
+
 };
 
 struct TypeStore {
@@ -27,7 +37,7 @@ private:
   /// Returns `t`'s metatype.
   ///
   /// - Requires: `t` has been declared and never explicitly defined in `this`.
-  Metatype& get_metatype(TypeHeader const* t);
+  Metatype& get_undefined_metatype(TypeHeader const* t);
 
 public:
 

@@ -92,7 +92,7 @@ Metatype::Metatype(
   }
 }
 
-Metatype& TypeStore::get_metatype(TypeHeader const* t) {
+Metatype& TypeStore::get_undefined_metatype(TypeHeader const* t) {
   auto entry = metatype.find(DereferencingKey<TypeHeader>{t});
   if (entry == metatype.end()) {
     throw std::out_of_range(t->description() + " is unknown");
@@ -104,7 +104,7 @@ Metatype& TypeStore::get_metatype(TypeHeader const* t) {
 }
 
 Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fields) {
-  auto& m = get_metatype(t);
+  auto& m = get_undefined_metatype(t);
 
   if (fields.empty()) {
     m = Metatype{0, 1, true, {}, {}};
@@ -126,7 +126,7 @@ Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fi
 }
 
 Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fields) {
-  auto& m = get_metatype(t);
+  auto& m = get_undefined_metatype(t);
 
   if (fields.empty()) {
     m = Metatype{0, 1, true, {}, {}};
