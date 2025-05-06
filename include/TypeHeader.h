@@ -127,53 +127,6 @@ private:
 
 };
 
-/// The header of a lambda type.
-struct LambdaHeader final : public TypeHeader {
-
-  /// The result type followed by the type of each parameter of the lambda.
-  const std::vector<TypeHeader const*> interface;
-
-  /// Creates an instance with the result type and parameter types.
-  constexpr LambdaHeader(
-    std::initializer_list<TypeHeader const*> interface
-  ) : interface(interface) {}
-
-  constexpr std::size_t hash_value() const override {
-    Hasher h;
-    h.combine(interface.begin(), interface.end());
-    return h.finalize();
-  }
-
-  constexpr bool equal_to(TypeHeader const& other) const override {
-    auto const* that = dynamic_cast<LambdaHeader const*>(&other);
-    if (that != nullptr) {
-      return this->interface == that->interface;
-    } else {
-      return false;
-    }
-  }
-
-  std::string description() const override {
-    std::stringstream o;
-    o << "(";
-    for (auto i = 1; i < interface.size(); ++i) {
-      if (i > 1) { o << ", "; }
-      o << interface[i]->description();
-    }
-    o << ") -> " << interface[0]->description();
-    return o.str();
-  }
-
-private:
-
-  void copy_initialize(void*, void*, TypeStore const&) const override;
-
-  void deinitialize(void*, TypeStore const&) const override;
-
-  void dump_instance(std::ostream&, void*, TypeStore const&) const override;
-
-};
-
 /// Common implementation of nominal product and sum types.
 struct CompositeHeader : public TypeHeader {
 

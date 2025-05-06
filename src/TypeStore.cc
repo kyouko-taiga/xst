@@ -188,14 +188,6 @@ void BuiltinHeader::copy_initialize(void* target, void* source, TypeStore const&
   s.copy_initialize(this, target, source);
 }
 
-void TypeStore::copy_initialize(LambdaHeader const* h, void* target, void* source) const {
-  precondition(false, "TODO");
-}
-
-void LambdaHeader::copy_initialize(void* target, void* source, TypeStore const& s) const {
-  s.copy_initialize(this, target, source);
-}
-
 void TypeStore::copy_initialize(StructHeader const* h, void* target, void* source) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
@@ -262,14 +254,6 @@ void BuiltinHeader::deinitialize(void* source, TypeStore const& s) const {
   s.deinitialize(this, source);
 }
 
-void TypeStore::deinitialize(LambdaHeader const* h, void* source) const {
-  precondition(false, "TODO");
-};
-
-void LambdaHeader::deinitialize(void* source, TypeStore const& s) const {
-  s.deinitialize(this, source);
-};
-
 void TypeStore::deinitialize(StructHeader const* h, void* source) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
@@ -325,14 +309,6 @@ void TypeStore::dump_instance(std::ostream& o, BuiltinHeader const* h, void* sou
 }
 
 void BuiltinHeader::dump_instance(std::ostream& o, void* source, TypeStore const& s) const {
-  s.dump_instance(o, this, source);
-}
-
-void TypeStore::dump_instance(std::ostream& o, LambdaHeader const* h, void* source) const {
-  precondition(false, "TODO");
-}
-
-void LambdaHeader::dump_instance(std::ostream& o, void* source, TypeStore const& s) const {
   s.dump_instance(o, this, source);
 }
 

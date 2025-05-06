@@ -236,9 +236,6 @@ public:
     memcpy(target, source, size(h));
   }
 
-  /// Implements `copy_initialize` for lambda types.
-  void copy_initialize(LambdaHeader const* h, void* target, void* source) const;
-
   /// Implements `copy_initialize` for struct types.
   void copy_initialize(StructHeader const* h, void* target, void* source) const;
 
@@ -254,9 +251,6 @@ public:
 
   /// Implements `deinitialize` for built-in types.
   inline void deinitialize(BuiltinHeader const* h, void* source) const {}
-
-  /// Implements `deinitialize` for lambda types.
-  void deinitialize(LambdaHeader const* h, void* source) const;
 
   /// Implements `deinitialize` for struct types.
   void deinitialize(StructHeader const* h, void* source) const;
@@ -279,9 +273,6 @@ public:
 
   /// Implements `dump_instance` for built-in types.
   void dump_instance(std::ostream& stream, BuiltinHeader const* type, void* source) const;
-
-  /// Implements `dump_instance` for lambda types.
-  void dump_instance(std::ostream& stream, LambdaHeader const* type, void* source) const;
 
   /// Implements `dump_instance` for struct types.
   void dump_instance(std::ostream& stream, StructHeader const* type, void* source) const;
