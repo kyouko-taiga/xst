@@ -69,6 +69,34 @@ struct BuiltinHeader final : public TypeHeader {
   /// Creates an instance with the given raw value.
   constexpr BuiltinHeader(Value raw_value) : raw_value(raw_value) {}
 
+  /// Returns the size of an instance of the type.
+  constexpr std::size_t size() const {
+    switch (raw_value) {
+      case BuiltinHeader::boolean:
+        return sizeof(bool);
+      case BuiltinHeader::i32:
+        return sizeof(int32_t);
+      case BuiltinHeader::i64:
+        return sizeof(int64_t);
+      case BuiltinHeader::str:
+        return sizeof(char const*);
+    }
+  }
+
+  /// Returns the alignment the type.
+  constexpr std::size_t alignment() const {
+    switch (raw_value) {
+      case BuiltinHeader::boolean:
+        return alignof(bool);
+      case BuiltinHeader::i32:
+        return alignof(int32_t);
+      case BuiltinHeader::i64:
+        return alignof(int64_t);
+      case BuiltinHeader::str:
+        return alignof(char const*);
+    }
+  }
+
   constexpr std::size_t hash_value() const override {
     return static_cast<std::size_t>(raw_value);
   }

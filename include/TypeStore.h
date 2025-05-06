@@ -116,20 +116,6 @@ public:
     return (*this)[type].size();
   }
 
-  /// Implements `size` for built-in types.
-  constexpr std::size_t size(BuiltinHeader const* h) const {
-    switch (h->raw_value) {
-      case BuiltinHeader::boolean:
-        return sizeof(bool);
-      case BuiltinHeader::i32:
-        return sizeof(int32_t);
-      case BuiltinHeader::i64:
-        return sizeof(int64_t);
-      case BuiltinHeader::str:
-        return sizeof(char const*);
-    }
-  }
-
   /// Returns the size of `field`.
   ///
   /// - Requires: the type of `field` has been declared and defined in `this`.
@@ -142,20 +128,6 @@ public:
   /// - Requires: `type` has been declared and defined in `this`.
   inline std::size_t alignment(TypeHeader const* type) const {
     return (*this)[type].alignment();
-  }
-
-  /// Implements `alignment` for built-in types.
-  constexpr std::size_t alignment(BuiltinHeader const* h) const {
-    switch (h->raw_value) {
-      case BuiltinHeader::boolean:
-        return alignof(bool);
-      case BuiltinHeader::i32:
-        return alignof(int32_t);
-      case BuiltinHeader::i64:
-        return alignof(int64_t);
-      case BuiltinHeader::str:
-        return alignof(char const*);
-    }
   }
 
   /// Returns the alignment of `field`.
@@ -328,11 +300,11 @@ public:
 
 template<>
 struct MetatypeConstructor<BuiltinHeader> {
-  Metatype operator()(BuiltinHeader const* h, TypeStore& store) {
-    auto s = store.size(h);
-    auto a = store.alignment(h);
-    return Metatype{s, a, true, {}, {}};
+
+  inline Metatype operator()(BuiltinHeader const* h, TypeStore& store) {
+    return Metatype{h->size(), h->alignment(), true, {}, {}};
   }
+
 };
 
 }
