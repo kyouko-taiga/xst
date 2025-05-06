@@ -41,15 +41,6 @@ private:
 
   friend TypeStore;
 
-  /// Implements `TypeStore::is_trivial` for the described type.
-  virtual bool is_trivial(TypeStore const&) const = 0;
-
-  /// Implements `TypeStore::size` for the described type.
-  virtual std::size_t size(TypeStore const&) const = 0;
-
-  /// Implements `TypeStore::alignment` for the described type.
-  virtual std::size_t alignment(TypeStore const&) const = 0;
-
   /// Implements `TypeStore::copy_initialize` for the described type.
   virtual void copy_initialize(void*, void*, TypeStore const&) const = 0;
 
@@ -102,14 +93,6 @@ struct BuiltinHeader final : public TypeHeader {
 
 private:
 
-  constexpr bool is_trivial(TypeStore const&) const override {
-    return true;
-  };
-
-  std::size_t size(TypeStore const&) const override;
-
-  std::size_t alignment(TypeStore const&) const override;
-
   void copy_initialize(void*, void*, TypeStore const&) const override;
 
   void deinitialize(void*, TypeStore const&) const override;
@@ -157,12 +140,6 @@ struct LambdaHeader final : public TypeHeader {
 
 private:
 
-  bool is_trivial(TypeStore const&) const override;
-
-  std::size_t size(TypeStore const&) const override;
-
-  std::size_t alignment(TypeStore const&) const override;
-
   void copy_initialize(void*, void*, TypeStore const&) const override;
 
   void deinitialize(void*, TypeStore const&) const override;
@@ -206,14 +183,6 @@ struct CompositeHeader : public TypeHeader {
     }
     return o.str();
   }
-
-protected:
-
-  bool is_trivial(TypeStore const&) const override;;
-
-  std::size_t size(TypeStore const&) const override;
-
-  std::size_t alignment(TypeStore const&) const override;
 
 };
 

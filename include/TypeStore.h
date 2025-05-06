@@ -40,7 +40,7 @@ private:
   /// Returns a pointer to this instance's payload iff it is defined and stored stored out-of-line.
   /// Otherwise, returns `nullptr`.
   inline std::size_t* base_address() const {
-    return ((data == 0) || (data & 1)) ? nullptr : reinterpret_cast<std::size_t*>(data);
+    return ((data == 0) || (data & 1)) ? nullptr : reinterpret_cast<std::size_t*>(data & ~0b11);
   }
 
 public:
@@ -48,7 +48,7 @@ public:
   Metatype() : data(0) {};
 
   Metatype(
-    std::size_t size, std::size_t alignment,
+    std::size_t size, std::size_t alignment, bool is_trivial,
     std::vector<Field>&& fields,
     std::vector<std::size_t>&& offsets
   );
@@ -75,7 +75,16 @@ public:
     return data != 0;
   }
 
+  /// Returns `true` iff none of the describe type does not contain out-of-line storage.
+  ///
+  /// - Requires: `this` is defined.
+  inline bool is_trivial() const {
+    return (data & 0b10) != 0;
+  }
+
   /// Returns the size of the described type.
+  ///
+  /// - Requires: `this` is defined.
   inline std::size_t size() const {
     auto base = base_address();
     if (base == nullptr) {
@@ -86,6 +95,8 @@ public:
   }
 
   /// Returns the alignment of the described type.
+  ///
+  /// - Requires: `this` is defined.
   inline std::size_t alignment() const {
     auto base = base_address();
     if (base == nullptr) {
@@ -96,6 +107,8 @@ public:
   }
 
   /// Returns the fields of the described type, if any.
+  ///
+  /// - Requires: `this` is defined.
   std::span<Field const> fields() const {
     auto base = base_address();
     if (base == nullptr) {
@@ -108,6 +121,8 @@ public:
   }
 
   /// Returns the offsets of the described type, if any.
+  ///
+  /// - Requires: `this` is defined.
   std::span<std::size_t> offsets() const {
     auto base = base_address();
     if (base == nullptr) {
@@ -137,24 +152,15 @@ private:
   /// A table from a type identifier to its corresponding metatype.
   std::unordered_map<DereferencingKey<TypeHeader>, Metatype> metatype;
 
-  /// Initializes the definition of `t`'s metatype.
+  /// Returns `t`'s metatype.
   ///
   /// - Requires: `t` has been declared and never explicitly defined in `this`.
-  Metatype& initialize_metatype(TypeHeader const* t);
+  Metatype& get_metatype(TypeHeader const* t);
 
 public:
 
   /// Creates an empty instance.
   TypeStore() = default;
-
-  /// Creates an instance in which `types` are declared and defined with `define`.
-  template<typename F>
-  TypeStore(std::initializer_list<TypeHeader const*> types, F define) {
-    for (auto const& t : types) {
-      metatype.insert_or_assign(DereferencingKey{t}, Metatype{});
-    }
-    define(*this);
-  }
 
   /// Returns a pointer to the unique instance equal to `identifier` in this store.
   template<typename T, typename M = MetatypeConstructor<T>>
@@ -181,14 +187,6 @@ public:
     return declare(BuiltinHeader{tag});
   }
 
-  /// Returns a pointer to the unique instance identifying `tag`, declaring it if necessary.
-  inline BuiltinHeader const* get(BuiltinHeader::Value tag) {
-    return declare(BuiltinHeader{tag});
-  }
-
-  /// Returns `true` iff `type` has been declared and defined in `this`.
-  bool defined(TypeHeader const* type) const;
-
   /// Assigns a metatype definition to `type`.
   ///
   /// - Requires: `type` has been declared and never explicitly defined in `this`.
@@ -204,32 +202,36 @@ public:
   /// - Requires: `type` has been declared and defined in `this`.
   Metatype const& operator[](TypeHeader const* type) const;
 
+  /// Returns `true` iff `h` has been declared and defined in `this`.
+  inline bool defined(TypeHeader const* h) const {
+    auto entry = metatype.find(DereferencingKey<TypeHeader>{h});
+    return (entry != metatype.end()) && entry->second.defined();
+  }
+
   /// Returns `true` iff instances of `type` do not involve out-of-line storage.
   ///
   /// - Requires `type` has been declared and defined in `this`.
   inline bool is_trivial(TypeHeader const* type) const {
-    return type->is_trivial(*this);
+    return (*this)[type].is_trivial();
   }
 
-  /// Implements `is_trivial` for built-in types.
-  constexpr bool is_trivial(BuiltinHeader const*) const {
-    return true;
+  /// Returns `true` iff `f` does not involve out-of-line storage.
+  inline bool is_trivial(Field const& f) const {
+    return !f.out_of_line() && is_trivial(f.type());
   }
 
-  /// Implements `is_trivial` for lambda types.
-  bool is_trivial(LambdaHeader const*) const;
-
-  /// Implements `is_trivial` for nominal types.
-  bool is_trivial(CompositeHeader const*) const;
-
-  /// Returns `true` iff none of the fields in `m` involves out-of-line storage.
-  bool is_trivial(Metatype const& m) const;
+  /// Returns `true` iff none of the given fields involves out-of-line storage.
+  inline bool all_trivial(std::span<Field const> const& fields) const {
+    return std::all_of(fields.begin(), fields.end(), [&](auto const& f) {
+      return is_trivial(f);
+    });
+  }
 
   /// Returns the size of an instance of `t`.
   ///
   /// - Requires: `type` has been declared and defined in `this`.
   inline std::size_t size(TypeHeader const* type) const {
-    return type->size(*this);
+    return (*this)[type].size();
   }
 
   /// Implements `size` for built-in types.
@@ -246,12 +248,6 @@ public:
     }
   }
 
-  /// Implements `size` for lambda types.
-  std::size_t size(LambdaHeader const*) const;
-
-  /// Implements `size` for nominal types.
-  std::size_t size(CompositeHeader const*) const;
-
   /// Returns the size of `field`.
   ///
   /// - Requires: the type of `field` has been declared and defined in `this`.
@@ -263,7 +259,7 @@ public:
   ///
   /// - Requires: `type` has been declared and defined in `this`.
   inline std::size_t alignment(TypeHeader const* type) const {
-    return type->alignment(*this);
+    return (*this)[type].alignment();
   }
 
   /// Implements `alignment` for built-in types.
@@ -279,14 +275,6 @@ public:
         return alignof(char const*);
     }
   }
-
-  /// Implements `alignment` for lambda types.
-  constexpr std::size_t alignment(LambdaHeader const*) const {
-    return alignof(void*);
-  }
-
-  /// Implements `alignment` for nominal types.
-  std::size_t alignment(CompositeHeader const*) const;
 
   /// Returns the alignment of `field`.
   ///
@@ -463,6 +451,15 @@ public:
     return o.str();
   }
 
+};
+
+template<>
+struct MetatypeConstructor<BuiltinHeader> {
+  Metatype operator()(BuiltinHeader const* h, TypeStore& store) {
+    auto s = store.size(h);
+    auto a = store.alignment(h);
+    return Metatype{s, a, true, {}, {}};
+  }
 };
 
 }

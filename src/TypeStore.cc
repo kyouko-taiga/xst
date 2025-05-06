@@ -62,7 +62,7 @@ std::vector<std::size_t> offsets(
 }
 
 Metatype::Metatype(
-  std::size_t size, std::size_t alignment,
+  std::size_t size, std::size_t alignment, bool trivial,
   std::vector<Field>&& fields,
   std::vector<std::size_t>&& offsets
 ) {
@@ -71,7 +71,7 @@ Metatype::Metatype(
 
   // Can we store everything inline?
   if ((field_count == 0) && !((size | alignment) & ~0xffff) && (sizeof(std::uintptr_t) >= 8)) {
-    data = (size << 32) | (alignment << 16) | 1;
+    data = (size << 32) | (alignment << 16) | (trivial ? 0b11 : 0b01);
   }
 
   // Use out-of-line storage.
@@ -88,11 +88,11 @@ Metatype::Metatype(
       buffer[i + 3 + field_count] = static_cast<std::size_t>(*(o++));
     }
 
-    data = reinterpret_cast<uintptr_t>(buffer);
+    data = reinterpret_cast<uintptr_t>(buffer) | (trivial ? 0b10 : 0b00);
   }
 }
 
-Metatype& TypeStore::initialize_metatype(TypeHeader const* t) {
+Metatype& TypeStore::get_metatype(TypeHeader const* t) {
   auto entry = metatype.find(DereferencingKey<TypeHeader>{t});
   if (entry == metatype.end()) {
     throw std::out_of_range(t->description() + " is unknown");
@@ -103,16 +103,11 @@ Metatype& TypeStore::initialize_metatype(TypeHeader const* t) {
   }
 }
 
-bool TypeStore::defined(TypeHeader const* t) const {
-  auto entry = metatype.find(DereferencingKey<TypeHeader>{t});
-  return (entry != metatype.end()) && entry->second.defined();
-}
-
 Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fields) {
-  auto& m = initialize_metatype(t);
+  auto& m = get_metatype(t);
 
   if (fields.empty()) {
-    m = Metatype{0, 1, {}, {}};
+    m = Metatype{0, 1, true, {}, {}};
   } else {
     // Compute field offsets.
     auto offsets = xst::offsets(fields, *this);
@@ -123,21 +118,23 @@ Metatype const& TypeStore::define(StructHeader const* t, std::vector<Field>&& fi
     std::size_t s = size(fields.back()) + offsets.back();
 
     // Define the metatype.
-    m = Metatype{s, a, std::move(fields), std::move(offsets)};
+    auto t = all_trivial(fields);
+    m = Metatype{s, a, t, std::move(fields), std::move(offsets)};
   }
 
   return m;
 }
 
 Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fields) {
-  auto& m = initialize_metatype(t);
+  auto& m = get_metatype(t);
 
   if (fields.empty()) {
-    m = Metatype{0, 1, {}, {}};
+    m = Metatype{0, 1, true, {}, {}};
   } else if (fields.size() == 1) {
     auto s = size(fields[0]);
     auto a = alignment(fields[0]);
-    m = Metatype{s, a, std::move(fields), {0}};
+    auto t = is_trivial(fields[0]);
+    m = Metatype{s, a, t, std::move(fields), {0}};
   } else {
     // Compute size and alignment.
     std::size_t s = 0;
@@ -151,7 +148,8 @@ Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fiel
     a = std::max(a, alignof(uint16_t));
 
     // Define the metatype.
-    m = Metatype{s, a, std::move(fields), {0, tag_offset}};
+    auto t = all_trivial(fields);
+    m = Metatype{s, a, t, std::move(fields), {0, tag_offset}};
   }
 
   return m;
@@ -160,6 +158,7 @@ Metatype const& TypeStore::define(EnumHeader const* t, std::vector<Field>&& fiel
 Metatype const& TypeStore::operator[](TypeHeader const* t) const {
   auto entry = metatype.find(DereferencingKey<TypeHeader>{t});
   if (entry != metatype.end()) {
+    precondition(entry->second.defined(), t->description() + " is not defined");
     return entry->second;
   } else {
     throw std::out_of_range(t->description() + " is unknown");
@@ -187,72 +186,6 @@ void* TypeStore::address_of(Metatype const& m, std::size_t i, void* base) const 
   }
 }
 
-bool TypeStore::is_trivial(LambdaHeader const*) const {
-  precondition(false, "TODO");
-  return false;
-}
-
-bool LambdaHeader::is_trivial(TypeStore const& s) const {
-  return s.is_trivial(this);
-}
-
-bool TypeStore::is_trivial(CompositeHeader const* h) const {
-  auto const& m = (*this)[h];
-  precondition(m.defined(), h->description() + " is not defined");
-  return is_trivial(m);
-}
-
-bool CompositeHeader::is_trivial(TypeStore const& s) const {
-  return s.is_trivial(this);
-}
-
-bool TypeStore::is_trivial(Metatype const& m) const {
-  auto fields = m.fields();
-  return std::all_of(fields.begin(), fields.end(), [&](auto const& f) {
-    return !f.out_of_line() && is_trivial(f.type());
-  });
-}
-
-std::size_t BuiltinHeader::size(TypeStore const& s) const {
-  return s.size(this);
-}
-
-std::size_t TypeStore::size(LambdaHeader const*) const {
-  return sizeof(void*) + sizeof(void*);
-}
-
-std::size_t LambdaHeader::size(TypeStore const& s) const {
-  return s.size(this);
-}
-
-std::size_t TypeStore::size(CompositeHeader const* h) const {
-  auto const& m = (*this)[h];
-  precondition(m.defined(), h->description() + " is not defined");
-  return m.size();
-}
-
-std::size_t CompositeHeader::size(TypeStore const& s) const {
-  return s.size(this);
-}
-
-std::size_t BuiltinHeader::alignment(TypeStore const& s) const {
-  return s.alignment(this);
-}
-
-std::size_t LambdaHeader::alignment(TypeStore const& s) const {
-  return s.alignment(this);
-}
-
-std::size_t TypeStore::alignment(CompositeHeader const* h) const {
-  auto const& m = (*this)[h];
-  precondition(m.defined(), h->description() + " is not defined");
-  return m.alignment();
-}
-
-std::size_t CompositeHeader::alignment(TypeStore const& s) const {
-  return s.alignment(this);
-}
-
 void BuiltinHeader::copy_initialize(void* target, void* source, TypeStore const& s) const {
   s.copy_initialize(this, target, source);
 }
@@ -269,7 +202,7 @@ void TypeStore::copy_initialize(StructHeader const* h, void* target, void* sourc
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
 
-  if (is_trivial(m)) {
+  if (m.is_trivial()) {
     memcpy(target, source, size(h));
   } else {
     auto fields = m.fields();
@@ -289,7 +222,7 @@ void TypeStore::copy_initialize(EnumHeader const* h, void* target, void* source)
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
 
-  if (is_trivial(m)) {
+  if (m.is_trivial()) {
     memcpy(target, source, size(h));
   } else {
     auto fields = m.fields();
@@ -343,7 +276,7 @@ void TypeStore::deinitialize(StructHeader const* h, void* source) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
 
-  if (is_trivial(m)) { return; }
+  if (m.is_trivial()) { return; }
 
   auto fields = m.fields();
   for (auto i = 0; i < fields.size(); ++i) {
@@ -361,7 +294,7 @@ void TypeStore::deinitialize(EnumHeader const* h, void* source) const {
   auto const& m = (*this)[h];
   precondition(m.defined(), h->description() + " is not defined");
 
-  if (is_trivial(m)) { return; }
+  if (m.is_trivial()) { return; }
 
   auto tag = static_cast<uint16_t*>(address_of(m, 1, source));
   auto s = address_of(m, 0, source);

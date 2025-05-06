@@ -6,11 +6,7 @@
 
 namespace rt {
 
-static auto i64 = xst::BuiltinHeader{xst::BuiltinHeader::i64};
-
-static xst::TypeStore store{
-  std::initializer_list<xst::TypeHeader const*>{&i64},
-  [](auto& s) {}};
+static xst::TypeStore store;
 
 xst::TypeHeader const* ListCons(xst::TypeHeader const* T);
 
@@ -46,14 +42,14 @@ xst::TypeHeader const* ListEmpty(xst::TypeHeader const* T) {
 }
 
 int main(int argc, const char * argv[]) {
-  auto a0 = rt::store.get(xst::BuiltinHeader::i64);
+  auto a0 = rt::store.declare(xst::BuiltinHeader::i64);
   auto a1 = rt::ListCons(a0);
   auto a2 = rt::ListEmpty(a0);
   auto a3 = rt::List(a0);
 
-  std::cout << a2->description() << std::endl;
-  std::cout << "  size:      " << rt::store.size(a2) << std::endl;
-  std::cout << "  alignment: " << rt::store.alignment(a2) << std::endl;
+  std::cout << a3->description() << std::endl;
+  std::cout << "  size:      " << rt::store.size(a3) << std::endl;
+  std::cout << "  alignment: " << rt::store.alignment(a3) << std::endl;
 
   // Allocate List.Cons<Int64> on the stack.
   rt::store.with_temporary_allocation(a1, 1, [&](auto p0) {
