@@ -304,15 +304,6 @@ public:
     return m.offsets()[i];
   }
 
-  /// Returns the offset of the `i`-th field of `type`.
-  ///
-  /// - Requires: `type` has been declared and defined in `this` and `i` is less the number of
-  ///   fields in an instance of `type`.
-  inline std::size_t offset(TypeHeader const* type, std::size_t i) const {
-    auto const& m = (*this)[type];
-    return offset(m, i);
-  }
-
   /// Returns `base` advanced by the offset of the `i`-th field of `m`.
   ///
   /// New storage is allocated iff the field whose address is computed is stored out-of-line and
