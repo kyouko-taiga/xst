@@ -11,8 +11,6 @@ namespace xst {
 struct TypeHeader;
 struct TypeStore;
 
-using TypeHeaderList = TypeHeader const**;
-
 /// The information necessary to uniquely identify atype.
 struct TypeHeader {
 

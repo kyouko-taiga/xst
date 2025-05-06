@@ -1,8 +1,6 @@
 #include "TypeHeader.h"
 #include "TypeStore.h"
 
-#include <cassert>
-
 namespace xst {
 
 /// Ensures that the given condition is satisfied or throws an error.
