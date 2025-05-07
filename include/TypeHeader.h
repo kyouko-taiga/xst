@@ -11,6 +11,13 @@ namespace xst {
 struct TypeHeader;
 struct TypeStore;
 
+/// A type-erased function pointer.
+///
+/// This type is used to compute the size and aligment of function pointers stored in instances of
+/// a lambda. It is used instead of `void*` because converting a function pointer to the latter is
+/// on defined on posix-compliant systems.
+using AnyFunction = void(*)();
+
 /// The information necessary to uniquely identify atype.
 struct TypeHeader {
 
@@ -58,7 +65,8 @@ struct BuiltinHeader final : public TypeHeader {
     boolean,
     i32,
     i64,
-    str,
+    ptr,
+    fun,
   };
 
   /// The raw value of this identifier.
@@ -70,28 +78,22 @@ struct BuiltinHeader final : public TypeHeader {
   /// Returns the size of an instance of the type.
   constexpr std::size_t size() const {
     switch (raw_value) {
-      case BuiltinHeader::boolean:
-        return sizeof(bool);
-      case BuiltinHeader::i32:
-        return sizeof(int32_t);
-      case BuiltinHeader::i64:
-        return sizeof(int64_t);
-      case BuiltinHeader::str:
-        return sizeof(char const*);
+      case boolean: return sizeof(bool);
+      case i32: return sizeof(int32_t);
+      case i64: return sizeof(int64_t);
+      case ptr: return sizeof(void*);
+      case fun: return sizeof(AnyFunction);
     }
   }
 
   /// Returns the alignment the type.
   constexpr std::size_t alignment() const {
     switch (raw_value) {
-      case BuiltinHeader::boolean:
-        return alignof(bool);
-      case BuiltinHeader::i32:
-        return alignof(int32_t);
-      case BuiltinHeader::i64:
-        return alignof(int64_t);
-      case BuiltinHeader::str:
-        return alignof(char const*);
+      case boolean: return alignof(bool);
+      case i32: return alignof(int32_t);
+      case i64: return alignof(int64_t);
+      case ptr: return alignof(void*);
+      case fun: return alignof(AnyFunction);
     }
   }
 
@@ -110,10 +112,11 @@ struct BuiltinHeader final : public TypeHeader {
 
   constexpr std::string description() const override {
     switch (raw_value) {
-      case Value::boolean: return "Bool";
-      case Value::i32: return "Int32";
-      case Value::i64: return "Int64";
-      case Value::str: return "String";
+      case boolean: return "i1";
+      case i32: return "i32";
+      case i64: return "i64";
+      case ptr: return "ptr";
+      case fun: return "fun";
     }
   }
 
@@ -139,7 +142,13 @@ struct CompositeHeader : public TypeHeader {
   /// Creates an instance with the given properties.
   constexpr CompositeHeader(
     const char* name, std::initializer_list<TypeHeader const*> arguments
-  ) : name(std::move(name)), arguments(arguments) {}
+  ) : name(name), arguments(arguments) {}
+
+  /// Creates an instance with the given properties.
+  template<typename Iterator>
+  constexpr CompositeHeader(
+    const char* name, Iterator first, Iterator last
+  ) : name(name), arguments(first, last) {}
 
   constexpr std::size_t hash_value() const override {
     Hasher h;
@@ -172,6 +181,12 @@ struct StructHeader final : public CompositeHeader {
   constexpr StructHeader(
     const char* name, std::initializer_list<TypeHeader const*> arguments
   ) : CompositeHeader(name, arguments) {}
+
+  /// Creates an instance with the given properties.
+  template<typename Iterator>
+  constexpr StructHeader(
+    const char* name, Iterator first, Iterator last
+  ) : CompositeHeader(name, first, last) {}
 
   constexpr bool equal_to(TypeHeader const& other) const override {
     auto const* that = dynamic_cast<StructHeader const*>(&other);

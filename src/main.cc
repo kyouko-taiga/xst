@@ -41,6 +41,10 @@ xst::TypeHeader const* ListEmpty(xst::TypeHeader const* T) {
 
 }
 
+void bar(uint64_t* result, uint64_t* e, uint64_t* n) {
+  *result = *n + *e;
+}
+
 int main(int argc, const char * argv[]) {
   auto a0 = rt::store.declare(xst::BuiltinHeader::i64);
   auto a1 = rt::ListCons(a0);
@@ -77,6 +81,27 @@ int main(int argc, const char * argv[]) {
 
     // Deinitializes the `List.Cons<Int64>` stoted in `p0`.
     rt::store.deinitialize(a1, p0);
+  });
+
+  auto a4 = rt::store.declare_lambda({ a0, a0, a0 });
+
+  /// Allocate storage for a lambda on the stack.
+  rt::store.with_temporary_allocation(a4, 1, [&](auto p5) {
+    // Write the address of `bar` to the lambda.
+    auto p6 = rt::store.address_of(a4, 0, p5);
+    rt::store.copy_initialize_function(p6, &bar);
+
+    // Write 10 to the environment of the lambda.
+    auto p7 = rt::store.address_of(a4, 1, p5);
+    rt::store.copy_initialize_builtin<uint64_t>(a0, p7, 10);
+
+    // Call the lambda.
+    auto f = *static_cast<xst::AnyFunction*>(p6);
+    auto g = reinterpret_cast<void(*)(uint64_t*,uint64_t*,uint64_t*)>(f);
+    auto e = static_cast<uint64_t*>(p7);
+    uint64_t result, n = 1;
+    g(&result, e, &n);
+    std::cout << result << std::endl;
   });
 
   return 0;

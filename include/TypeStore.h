@@ -28,8 +28,8 @@ struct MetatypeConstructor {
 struct TypeStore {
 private:
 
-  /// An array containing the type ifentifiers allocated in this store.
-  std::vector<std::unique_ptr<TypeHeader>> identifiers;
+  /// An array containing the type headers allocated in this store.
+  std::vector<std::unique_ptr<TypeHeader>> headers;
 
   /// A table from a type identifier to its corresponding metatype.
   std::unordered_map<DereferencingKey<TypeHeader>, Metatype> metatype;
@@ -56,8 +56,8 @@ public:
 
     // The identifier is unknown; intern it.
     else {
-      identifiers.emplace_back(std::make_unique<T>(std::move(identifier)));
-      auto const* p = identifiers.back().get();
+      headers.emplace_back(std::make_unique<T>(std::move(identifier)));
+      auto const* p = headers.back().get();
       auto const* q = static_cast<T const*>(p);
       metatype.emplace(std::make_pair(DereferencingKey{p}, M{}(q, *this)));
       return q;
@@ -68,6 +68,12 @@ public:
   inline BuiltinHeader const* declare(BuiltinHeader::Value tag) {
     return declare(BuiltinHeader{tag});
   }
+
+  /// Returns a pointer to the unique instance identifying a lambda having the given API.
+  ///
+  /// The API is a list of type headers. The first denotes the type of the lambda's environment,
+  /// the second denotes the return type, and the remainder denotes the types of the parameters.
+  StructHeader const* declare_lambda(std::vector<TypeHeader const*>&& api);
 
   /// Assigns a metatype definition to `type`.
   ///
@@ -216,6 +222,14 @@ public:
     copy_initialize(type, target, &source);
   }
 
+
+  /// Initializes `target` with the value of `function`, which is a function pointer.
+  template<typename T>
+  inline void copy_initialize_function(void* target, T function) {
+    auto h = declare(BuiltinHeader::fun);
+    copy_initialize_builtin(h, target, reinterpret_cast<AnyFunction>(function));
+  }
+
   /// Initializes `target`, which points to storage for an instance of `type`, to a copy of the
   /// value stored at `source`, which is an instance of the `tag`-th case of `type`.
   ///
@@ -292,7 +306,7 @@ public:
 template<>
 struct MetatypeConstructor<BuiltinHeader> {
 
-  inline Metatype operator()(BuiltinHeader const* h, TypeStore& store) {
+  inline Metatype operator()(BuiltinHeader const* h, TypeStore&) {
     return Metatype{h->size(), h->alignment(), true, {}, {}};
   }
 
